@@ -1,0 +1,619 @@
+---
+title: "TMobile Twitter Profile"
+resource_files:
+- tmob_LDA.RData
+- tmobile_company.RData
+- tmobile_company2.Rdata
+- tmobile_users.RData
+- tmobile_users2.Rdata
+- total_sentiment.Rdata
+- users_LDA.RData
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r global, include=FALSE}
+library(flexdashboard)
+library(leaflet)
+library(DT)
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(wordcloud)
+for (i in c('SnowballC','slam','tm','Matrix','tidytext','dplyr','hunspell','purrr','textstem',
+            'ggplot2','treemapify','treemap','miceadds', 'ggplot2', 'reshape2', 'leaflet',
+            'rsconnect', 'reshape')){
+  if (!require(i, character.only=TRUE)) install.packages(i, repos = "http://cran.us.r-project.org")
+  require(i, character.only=TRUE)
+}
+
+options(shiny.sanitize.errors = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
+
+
+#all tweets from official handles
+load("~/GitHub/SMA/Group assignment/Final/tmobile_company.Rdata")
+
+tmobile <- tmobile_company 
+
+#allsentiment tweets from official handles
+load("~/GitHub/SMA/Group assignment/Final/tmobile_company2.Rdata")
+
+tmobilesenti <- tmobile_company3
+
+#all tweets using company hashtage
+load("~/GitHub/SMA/Group assignment/Final/tmobile_users.Rdata")
+
+tuser <- tmobile_users %>%
+          filter(!screen_name %in% c('TMobileTruckPHM','TMobile','T_Labs','TMobileHelp','JohnLegere','SievertMike',
+                            'MetroByTMobile','TMobileArena','TMobilePark','tmobilecareers','TMobileBusiness',
+                            'TMobileIR','TMobileNews'))
+
+#all user sentiment tweets using company hashtage
+load("~/GitHub/SMA/Group assignment/Final/tmobile_users2.Rdata")
+
+tusersenti <- tmobile_users2
+
+#summary sentiments
+load("~/GitHub/SMA/Group assignment/Final/total_sentiment.Rdata")
+
+totalsenti <- total_sentiment
+
+#load Tmobile LDA results
+load("~/GitHub/SMA/Group assignment/Final/tmob_LDA.RData")
+
+tmobileLDA <- tweets_lda
+
+#load Users LDA results
+load("~/GitHub/SMA/Group assignment/Final/users_LDA.RData")
+
+userLDA <- hashreply_tweets_lda
+
+
+```
+
+
+Company Footprint
+=====================================
+
+
+Column{.tabset}
+-----------------------------------------------------------------------
+
+### Overall Word Cloud
+
+```{r, echo=FALSE}
+
+#WordCloud Original Text from users
+
+tf = termFreq(tmobile$text)
+
+sliderInput('Frequencyover', label='Select the N of words', min=1, max= 300,
+            value=15, dragRange = TRUE)
+
+renderPlot({
+wordcloud(names(tf),tf,
+          max.words=input$Frequencyover,
+          scale=c(3,1),colors=brewer.pal(8, "Dark2"),random.color = TRUE)
+})
+
+```
+
+### Hashtags Word Cloud
+
+```{r, echo=FALSE}
+
+#WordCloud all hashtags from users
+
+hashtags=tmobile$hashtags
+corpus_hashtags = VCorpus(VectorSource(hashtags))
+dtmHastags = DocumentTermMatrix(corpus_hashtags, control = list( wordlengths=c(2,Inf),
+                                                                         weighting =function(x) weightTf(x)))
+a = as.matrix(dtmHastags)
+# Count occurrences of each term
+b = sort(colSums(a),decreasing=TRUE)
+c = data.frame(row.names=NULL,word = names(b),freq=b)
+#Create word cloud
+options(warn=-1) #turn warnings off
+sliderInput('Frequencyhash', label='Select the N of words', min=1, max= 300,
+            value=15, dragRange = TRUE)
+
+renderPlot({
+wordcloud(c$word,c$freq,
+          max.words=input$Frequencyhash,
+          scale=c(3,1),colors=brewer.pal(8, "Dark2"),random.color = TRUE)
+})
+```
+
+### Company handles' followers
+
+```{r, echo=FALSE}
+
+# Treemap followers by user 
+
+renderPlot({
+  gf=tmobile %>%
+  group_by(screen_name) %>%
+  summarise(tweets=n(),followers=max(followers_count)) 
+
+  group <- gf$screen_name
+  value <- gf$followers
+  data <- data.frame(group,value)
+
+  treemap(data,index="group",vSize="value",type="index",palette="RdYlBu",
+        position.legend = 'right',fontsize.legend=6)
+})
+```
+
+> TMobile's CEO, John Legere, has the highest number of followers. Next is TMobile and then TMobileHelp, which is their customer supprt handle. 
+
+Column{.tabset}
+-----------------------------------------------------------------------
+
+### Overall Engagement x Handle 
+
+```{r, echo=FALSE}
+
+renderPlotly({
+  tmobile_company %>%
+    mutate(date=as.Date(created_at),hour=format(created_at,"%H"),wday=wday(date)) %>%
+    select(hour, screen_name,favorite_count,retweet_count)%>%
+    group_by(hour,screen_name) %>%
+    summarise(overall_engagement=sum(favorite_count)+sum(retweet_count))%>%
+    ggplot(aes(screen_name,hour))+
+      geom_raster(aes(fill = overall_engagement))+
+      scale_fill_gradient(low = "grey90", high = "steelblue", name = "Engagement count")+
+      xlab("Handle") +
+      ylab("Hour of day") +
+      theme(legend.title = element_blank(), axis.text.x = element_text(angle = 45, hjust=1))
+
+})
+```
+
+>We measure the engagement of each company’s handle as the sum of total Likes and total Retweets. We can observe that TMobile's CEO, John Legere, has the highest engagement. Also, it sees high engagement starting from afternoon till midnight.
+
+### Engagement details x Handle
+
+```{r, echo=FALSE}
+
+renderPlotly({
+    engcompany2=tmobile_company%>%
+      mutate(retweet=ifelse(retweet_count>0,1,0),like=ifelse(favorite_count>0,1,0),
+         respond=ifelse(is.na(reply_to_user_id),0,1))%>%
+      group_by(screen_name)%>%
+      summarise(tweets=n(),retweets=sum(retweet),likes=sum(like),responds=sum(respond,is.na=TRUE))
+
+    total_tweets <- engcompany2$tweets
+    retweeted_tweets <- engcompany2$retweets
+    liked_tweets<- engcompany2$likes
+    respond_tweets<-engcompany2$responds
+    user <- engcompany2$screen_name
+
+
+    df1 <- data.frame(retweeted_tweets,liked_tweets,respond_tweets,total_tweets, user)
+    df2 <- melt(df1, id.vars='user')
+  
+    ggplot(df2, aes(x=reorder(user,value), y=value, fill=variable)) +
+      geom_bar(stat='identity', position='dodge')+
+      coord_flip()+
+      theme(legend.title = element_blank(),legend.position=c(0.8, 0.2),axis.title = element_blank(),
+        legend.key.size = unit(0.4, "cm"))+
+      scale_fill_manual(values = c("grey69", "firebrick1", "springgreen3","dodgerblue1"),
+                    labels = c("Retweeted tweets", "Liked tweeets", "Respond tweets","Total tweets"))+
+      guides(fill = guide_legend(reverse = TRUE))
+})
+```
+
+> JohnLegere, TMobileArena and TMobilePark have almost all their tweets with at least one Like, showing high engagement levels from users. Their tweets also get retweeted more often. On the other hand, TMobileHelp has the highest number of tweets and all their tweets are in response to users, but very few Likes. The account TMobile has a similar engagement behaviour.
+
+### Tweets per Hour
+
+```{r, echo=FALSE}
+
+  renderPlotly({
+  tmobile%>%
+    mutate(date=as.Date(created_at))%>%
+    mutate(hour=format(created_at,"%H")) %>%
+    group_by(hour) %>%
+    summarise(tweet_count = n()) %>%
+    ggplot(aes(hour, tweet_count)) +
+    geom_col() +
+    ylab("Nr of tweets") +
+    xlab("Hour of day") +
+    coord_flip()
+    
+})
+```
+
+> Company’s handles are posting more between afternoon and late night, rather than in the morning. The hour with the highest post is 23:00 HRS.
+
+
+User Profile
+=====================================
+
+Column {.tabset}
+-----------------------------------------------------------------------
+
+### Users Location
+
+```{r, echo=FALSE}
+
+#Users' location: only USA 
+
+usa=tuser[tuser$country_code=='US',]
+coordenates=usa$bbox_coords
+long=unlist(lapply(coordenates, '[[', 1))
+lat=unlist(lapply(coordenates, '[[', 8))
+
+
+leaflet(options = leafletOptions(minZoom = 0, maxZoom = 18)) %>%
+addTiles() %>%
+addMarkers(lng = long, lat = lat,clusterOptions = markerClusterOptions())
+
+```
+
+> We plotted the tweets for which location was available and filetered for US based users posting tweets about TMobile. They are concentrated mainly on the East coast of the United States.
+
+### Users Hashtags Word Cloud
+
+```{r, echo=FALSE}
+
+#WordCloud all hashtags from users
+
+hashtags=tuser$hashtags
+corpus_hashtags = VCorpus(VectorSource(hashtags))
+dtmHastags = DocumentTermMatrix(corpus_hashtags, control = list( wordlengths=c(2,Inf),
+                                                                         weighting =function(x) weightTf(x)))
+a = as.matrix(dtmHastags)
+# Count occurrences of each term
+b = sort(colSums(a),decreasing=TRUE)
+c = data.frame(row.names=NULL,word = names(b),freq=b)
+#Create word cloud
+options(warn=-1) #turn warnings off
+
+sliderInput('Frequencyuser', label='Select the N of words', min=1, max= 300,
+            value=15, dragRange = TRUE)
+
+renderPlot({
+  wordcloud(c$word,c$freq,
+          max.words=input$Frequencyuser,
+          scale=c(3,1),colors=brewer.pal(8, "Dark2"),random.color = TRUE)
+})
+```
+
+> #contest and #5gthatworks are popular because during Super Bowl, T-Mobile was giving away 5 phones every 5 minutes.
+
+### User's behaviour x platform
+
+```{r, echo=FALSE}
+
+#WordCloud Original Text from users
+renderDataTable({
+  datatable(
+    tmobile_users %>%
+    mutate(source2 = ifelse(source == "Twitter for Android", "Android", 
+                          ifelse(source == "Twitter for iPhone", "iPhone", 
+                                 ifelse(source == "Twitter Web App", "WebApp", "Others")))) %>%
+    group_by(user_id, source2) %>%
+    summarise(foll = max(followers_count), 
+            twts = max(statuses_count), lists = max(listed_count)) %>%
+    ungroup() %>%
+    group_by(source2) %>%
+    summarise(Followers = sum(foll), Tweets = sum(twts), Lists = round(mean(lists),0)) %>%
+    arrange(-Followers)
+  )
+})
+
+```
+
+> Looking at dedicated platforms, iPhone users are the most prolific tweeters and have the highest number of total followers. But, they dont subscribe to as many lists as those using using the WebApp platform. 
+
+
+Column{.tabset}
+-----------------------------------------------------------------------
+
+### Favourite count by platform
+
+```{r, echo=FALSE}
+
+# User tweets by the hour
+  
+renderPlotly({
+  tuser %>%
+    mutate(source2 = ifelse(source == "Twitter for Android", "Android", 
+                          ifelse(source == "Twitter for iPhone", "iPhone", 
+                                 ifelse(source == "Twitter Web App", "WebApp", "Others")))) %>%
+    ggplot(aes(x=source2, y=favorite_count, fill=source2)) + 
+    geom_boxplot() +
+    theme(legend.position="none") +
+    xlab("Platform") +
+    ylab("Favourite count") +
+    geom_jitter(shape=16, position=position_jitter(0.2))
+  
+})
+```
+
+> Save for one outlier on Android, more number of iPhone users have higher engagement levels when it comes to Likes 
+
+### Retweet Count by Platform 
+
+```{r, echo=FALSE}
+
+# User tweets by the hour
+  
+renderPlotly({
+  tuser %>%
+    mutate(source2 = ifelse(source == "Twitter for Android", "Android", 
+                          ifelse(source == "Twitter for iPhone", "iPhone", 
+                                 ifelse(source == "Twitter Web App", "WebApp", "Others")))) %>%
+    ggplot(aes(x=source2, y=retweet_count, fill=source2)) + 
+    geom_boxplot() +
+    theme(legend.position="none") +
+    xlab("Platform") +
+    ylab("Retweets count") +
+    geom_jitter(shape=16, position=position_jitter(0.2))
+  
+})
+```
+
+> Save for one outlier on Android, more number of iPhone users have higher engagement levels when it comes to being retweeted 
+
+### Tweets per Hour
+
+```{r, echo=FALSE}
+
+# User tweets by the hour
+  
+renderPlotly({
+  tuser%>%
+    mutate(date=as.Date(created_at))%>%
+    mutate(hour=format(created_at,"%H")) %>%
+    group_by(hour) %>%
+    summarise(tweet_count = n()) %>%
+    ggplot(aes(hour, tweet_count)) +
+    geom_col() +
+    ylab("Nr of tweets") +
+    xlab("Hour of day") +
+    coord_flip()
+  
+})
+```
+
+>The users are posting more in the afternoon and between midnight and very early morning. The hour with the most posts is 02:00 HRS.
+
+
+Sentiment Analysis
+=====================================
+
+Column {.tabset}
+-----------------------------------------------------------------------
+
+### Users' sentiments
+```{r, echo=FALSE}
+
+sliderInput('Frequency', label='Select the N of words', min=1, max= 300,
+            value=15, dragRange = TRUE)
+
+  totalsenti_user <- totalsenti%>%
+    filter(totalsenti$source == "Users Tweets", totalsenti$sentiment == "positive")
+  
+renderPlot({
+  wordcloud(words = totalsenti_user$word ,freq = totalsenti_user$n, min.freq = 1, colors=brewer.pal(8, "Dark2"),random.order=FALSE, rot.per=0.35, max.words=input$Frequency)
+  
+})
+
+```
+
+> It represents the most positive words in users' tweets
+
+### Users' sentiment x Golden Ratio 
+
+```{r, echo=FALSE}
+
+renderPlotly({
+  tusersenti %>%
+    mutate(gratio = followers_count/friends_count) %>%
+    group_by(user_id) %>%
+    summarise(meansent = mean(sentiment), grat = max(gratio)) %>%
+    ungroup() %>%
+    ggplot(aes(x = grat, y = meansent)) +
+    geom_point() +
+    ylab("Mean Sentiment per user") +
+    xlab("Golden Ratio: Followers/Friends") +
+    geom_smooth()
+  })
+
+```
+
+> Golden Ratio: Followers/Friends. A ratio above 1 would mean that the user has positive follower count and those with higher ratios could be influencers. Plotting their tweets' sentiments we see that TMobile does well with users having lower golden ratio, but decline rapidly with more influential users. 
+
+### Users' sentiment x followers 
+
+```{r, echo=FALSE}
+
+renderPlotly({
+  tusersenti %>%
+    group_by(user_id) %>%
+    summarise(meansent = mean(sentiment), foll = max(followers_count)) %>%
+    ungroup() %>%
+    ggplot(aes(x = foll, y = meansent)) +
+    geom_point() +
+    ylab("Mean Sentiment per user") +
+    xlab("Number of Followers") +
+    geom_smooth()
+  })
+
+```
+
+> We see slightly better pattern than the golden ratio chart when plotting sentiments against users' followers count. Save for one user with very high follower count, TMobile generally does well with users having hign number of followers.
+
+Column {.tabset}
+-----------------------------------------------------------------------
+
+### Users' sentiments-Time
+
+```{r, echo=FALSE}
+renderPlotly({
+  
+  tusersenti %>%
+  mutate(Sentiment=ifelse(sentiment>0, "Positive", "Negative")) %>%
+  mutate(hour=format(created_at,"%H")) %>%
+  mutate(wday=as.POSIXlt(created_at)$wday) %>%
+  ggplot(aes(x=wday,y=hour, color=Sentiment)) + 
+    ylab("Hour of day") +
+    xlab("Day of the week") +
+    geom_jitter()
+
+})
+
+```
+
+> Represent the sentiment of the users' tweets during the week and during the hours of the day. There are two peaks for positive tweets: the first day of the week between 0 to 3 am and the second day of the week from 12 to 15 pm.
+
+### TMobile's sentiments-Time
+
+```{r, echo=FALSE}
+renderPlotly({
+  tmobilesenti %>%
+  mutate(Sentiment=ifelse(sentiment>0, "Positive", "Negative")) %>%
+  mutate(hour=format(created_at,"%H")) %>%
+  mutate(wday=as.POSIXlt(created_at)$wday) %>%
+  ggplot(aes(x=wday,y=hour, color=Sentiment)) + 
+  ylab("Hour of day") +
+  xlab("Day of the week") +
+  geom_jitter()
+
+})
+
+```
+
+> Represents the sentiment of the company tweets during the week and during the hours of the day. It shows that the only gap in the company's tweeting activity is during morning.
+
+### Users' sentiments x platform
+```{r, echo=FALSE}
+
+renderPlotly({
+  tusersenti %>%
+    mutate(source2 = ifelse(source == "Twitter for Android", "Android", 
+                          ifelse(source == "Twitter for iPhone", "iPhone", 
+                                 ifelse(source == "Twitter Web App", "WebApp", "Others")))) %>%
+    ggplot(aes(x=source2, y=sentiment, fill=source2)) + 
+    geom_boxplot() +
+    xlab("Platform") +
+    ylab("Mean Sentiment") +
+    theme(legend.position="none")
+  
+})
+
+
+```
+
+> Even though the users on the WebApp showed the highest range of sentiments, from extreme positive to negative, they had the highest median sentiment too. Android users were the second most content lot.
+
+Topic Analysis
+=====================================
+
+Column{.tabset}
+-----------------------------------------------------------------------
+
+### TMobile Topics Analysis
+
+```{r, echo=FALSE}
+
+tmobile_topics <- tidy(tmobileLDA, matrix = "beta")
+
+
+  tmobile_topics %>%
+    group_by(topic) %>%
+    top_n(10, beta) %>%
+    ungroup() %>%
+    arrange(topic, -beta) %>%
+    mutate(term = reorder_within(term, beta, topic)) %>%
+    ggplot(aes(term, beta, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    coord_flip() +
+    scale_x_reordered()
+
+```
+
+> The 1st topic has words relating to general business, the 2nd topic seems related to competitions and the 3rd topic has some words expressing sentiments. In the next slide we can see the weights of each topic under each handle.
+
+### TMobile Gamma Analysis
+
+```{r, echo=FALSE}
+
+tmobile_handles <- tidy(tmobileLDA, matrix = "gamma")
+
+tmobile_handles%>%
+  mutate(title = reorder(document, gamma * topic)) %>%
+  ggplot(aes(factor(topic), gamma)) +
+  geom_boxplot() +
+  facet_wrap(~ document)
+
+```
+
+> All the promotion and business related handles, incuding the CEO's, have higher weightage towards the 1st topic. The main handle, TMobile, seems to be related to the 2nd topic. The official customer support handle, TMobileHelp, has higher weightage on 3rd topic which has customer interaction words.
+
+### TMobile Gamma Table
+
+```{r, echo=FALSE}
+
+datatable(tmobile_handles)
+
+```
+
+> Sorting on the gamma value will show the actual values depicting the strength of association between different handles and the topics.  
+
+Column{.tabset}
+-----------------------------------------------------------------------
+### Users' Topic Analysis
+
+```{r, echo=FALSE}
+
+user_topics <- tidy(userLDA, matrix = "beta")
+
+  user_topics %>%
+    group_by(topic) %>%
+    top_n(10, beta) %>%
+    ungroup() %>%
+    arrange(topic, -beta) %>%
+    mutate(term = reorder_within(term, beta, topic)) %>%
+    ggplot(aes(term, beta, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    coord_flip() +
+    scale_x_reordered()
+
+```
+
+> No perceptible difference can be seen in words belonging to different topics and there is some degree of overlap between the topics.
+
+### Users' Gamma Analysis
+
+```{r, echo=FALSE}
+
+user_platform <- tidy(userLDA, matrix = "gamma")
+
+user_platform%>%
+  mutate(title = reorder(document, gamma * topic)) %>%
+  ggplot(aes(factor(topic), gamma)) +
+  geom_boxplot() +
+  facet_wrap(~ document)
+
+```
+
+> Our analysis from previous slide is further confirmed as we see the weighage of the 1st topic is high among 3 out of 4 platforms. 
+
+### Users' Gamma Table
+
+```{r, echo=FALSE}
+
+datatable(user_platform)
+
+```
+
+> Sorting on the gamma value show that WebApp has highest association with topic 1. However, other handles also show higher weightage towards the 1st topic. 
